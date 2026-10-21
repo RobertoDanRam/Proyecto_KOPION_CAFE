@@ -134,14 +134,10 @@ Cálculo automático para:
 | Lenguaje Principal | Swift 5.9 |
 | Framework UI | SwiftUI |
 | Persistencia Local | SwiftData / Core Data |
-| Comunicación de Red | URLSession + REST API |
 | Integración Cloud | Firebase |
 | Diseño e Iconografía | SF Symbols 5 + Apple Human Interface Guidelines |
-| Backend | Laravel 11 |
-| Lenguaje Backend | PHP 8.2 |
-| Base de Datos | MySQL 8.0 |
-| Autenticación | Laravel Sanctum |
-| UI Backend | laravel/ui |
+| Autenticación | Firebase auth |
+
 
 ---
 
