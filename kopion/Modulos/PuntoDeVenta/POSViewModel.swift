@@ -1,109 +1,91 @@
 //
 //  POSViewModel.swift
-//  kopion / Modules / POS
+//  kopion / Modulos / PuntoDeVenta
 //
 //  Lógica del POS exclusivo de empleados.
-//  isSubmitting bloquea el botón de cobro para evitar doble registro de ventas.
-//  Las ventas recientes permiten reimpresión de tickets y pre-corte de caja.
+//  estaEnviando bloquea el botón de cobro para evitar doble registro de ventas.
 //
 
 import Combine
 import Foundation
 
-/// ViewModel del POS: cobro rápido, ventas recientes, cambios y devoluciones.
 @MainActor
 final class POSViewModel: LoadableViewModel {
 
-    // MARK: - Estado publicado
+    @Published private(set) var ventasRecientes: [Sale] = []
+    @Published var sucursalSeleccionada: Branch = .kopionESCA
+    @Published var textoPagoRecibido = "100"
 
-    /// Ventas del día para reimpresión de tickets y pre-corte.
-    @Published private(set) var recentSales: [Sale] = []
-
-    /// Sucursal activa del empleado en turno.
-    @Published var selectedBranch: Branch = .kopionESCA
-
-    /// Monto recibido del cliente (texto para campo numérico táctil).
-    @Published var paidAmountText = "100"
-
-    // MARK: - Dependencias
-
-    private let service: POSServicing
-    private var task: Task<Void, Never>?
-
-    // MARK: - Init
+    private let servicio: POSServicing
+    private var tarea: Task<Void, Never>?
 
     override init() {
-        self.service = POSService()
+        self.servicio = POSService()
         super.init()
     }
 
-    init(service: POSServicing) {
-        self.service = service
+    init(servicio: POSServicing) {
+        self.servicio = servicio
         super.init()
     }
 
-    // MARK: - Acciones
+    func cargar() {
+        guard tarea == nil else { return }
+        estaCargando = true
+        mensajeError = nil
 
-    /// Carga ventas recientes para reimpresión y pre-corte de caja.
-    func load() {
-        guard task == nil else { return }
-        isLoading = true
-        errorMessage = nil
-
-        task = Task {
+        tarea = Task {
             do {
-                recentSales = try await service.fetchRecentSales()
+                ventasRecientes = try await servicio.fetchRecentSales()
             } catch is CancellationError {
             } catch {
-                errorMessage = error.localizedDescription
+                mensajeError = error.localizedDescription
             }
-            isLoading = false
-            task = nil
+            estaCargando = false
+            tarea = nil
         }
     }
 
-    /// Registra una venta de muestra.
-    /// isSubmitting bloquea el botón para evitar doble cobro por doble tap.
-    func registerSampleSale() {
-        guard !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
+    /// Registra una venta de muestra. estaEnviando bloquea el botón para evitar doble cobro.
+    func registrarVentaRapida() {
+        guard !estaEnviando else { return }
+        estaEnviando = true
+        mensajeError = nil
 
         Task {
             do {
-                let product = SampleData.products[0]
-                let sale = Sale(
+                let producto = SampleData.products[0]
+                let venta = Sale(
                     id: UUID(),
                     folio: "V-\(Int.random(in: 3000...9999))",
-                    branch: selectedBranch,
+                    branch: sucursalSeleccionada,
                     collaboratorName: "Colaborador",
                     items: [
                         SaleLineItem(
                             id: UUID(),
-                            productID: product.id,
-                            productName: product.name,
-                            branch: selectedBranch,
+                            productID: producto.id,
+                            productName: producto.name,
+                            branch: sucursalSeleccionada,
                             quantity: 1,
-                            unitPrice: product.price(for: selectedBranch)
+                            unitPrice: producto.price(for: sucursalSeleccionada)
                         )
                     ],
                     paymentMethod: .cash,
-                    paidAmount: Decimal(string: paidAmountText) ?? 0,
+                    paidAmount: Decimal(string: textoPagoRecibido) ?? 0,
                     createdAt: .now
                 )
-                let saved = try await service.registerSale(sale)
-                recentSales.insert(saved, at: 0)
+                let guardada = try await servicio.registerSale(venta)
+                ventasRecientes.insert(guardada, at: 0)
             } catch {
-                errorMessage = error.localizedDescription
+                mensajeError = error.localizedDescription
             }
-            isSubmitting = false
+            estaEnviando = false
         }
     }
 
-    /// Cancela la carga activa al salir de pantalla.
-    func cancel() {
-        task?.cancel()
-        task = nil
-        isLoading = false
+    func cancelar() {
+        tarea?.cancel()
+        tarea = nil
+        estaCargando = false
     }
 }

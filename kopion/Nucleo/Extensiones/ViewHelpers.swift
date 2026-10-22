@@ -4,7 +4,7 @@
 //
 //  Utilidades compartidas por todas las vistas:
 //  - CurrencyFormatter: formatea Decimal a pesos mexicanos.
-//  - errorBinding: crea un Binding<Bool> para alertas de error en cualquier LoadableViewModel.
+//  - enlaceError: crea un Binding<Bool> para alertas de error en cualquier LoadableViewModel.
 //  - MetricTile / ModuleRow / SectionHeader: componentes visuales reutilizables.
 //
 
@@ -26,14 +26,14 @@ enum CurrencyFormatter {
 
 // MARK: - Binding de error reutilizable
 
-/// Genera un Binding<Bool> que se activa cuando el ViewModel tiene un errorMessage.
+/// Genera un Binding<Bool> que se activa cuando el ViewModel tiene un mensajeError.
 /// Permite usar .alert() en cualquier vista sin repetir lógica.
 @MainActor
-func errorBinding(for viewModel: LoadableViewModel) -> Binding<Bool> {
+func enlaceError(para viewModel: LoadableViewModel) -> Binding<Bool> {
     Binding(
-        get: { viewModel.errorMessage != nil },
-        set: { isPresented in
-            if !isPresented { viewModel.clearError() }
+        get: { viewModel.mensajeError != nil },
+        set: { estaPresente in
+            if !estaPresente { viewModel.limpiarError() }
         }
     )
 }

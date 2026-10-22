@@ -1,9 +1,6 @@
 //
 //  PaymentsView.swift
-//  kopion / Modules / Payments
-//
-//  Módulo 7: Gestión de pagos y conciliación manual.
-//  Fase 1: vinculación manual de capturas de transferencias o vouchers al folio de venta.
+//  kopion / Modulos / Pagos
 //
 
 import Combine
@@ -15,11 +12,10 @@ struct PaymentsView: View {
     var body: some View {
         List {
 
-            // MARK: Conciliaciones manuales por folio
             Section("Conciliación manual") {
-                if viewModel.isLoading { ProgressView() }
+                if viewModel.estaCargando { ProgressView() }
 
-                ForEach(viewModel.reconciliations) { item in
+                ForEach(viewModel.conciliaciones) { item in
                     ModuleRow(
                         title: item.saleFolio,
                         detail: "\(item.branch.shortName) · \(item.method.displayName) · \(item.evidenceFileName)",
@@ -30,7 +26,7 @@ struct PaymentsView: View {
             }
         }
         .navigationTitle("Pagos")
-        .task { viewModel.load() }
-        .onDisappear { viewModel.cancel() }
+        .task { viewModel.cargar() }
+        .onDisappear { viewModel.cancelar() }
     }
 }

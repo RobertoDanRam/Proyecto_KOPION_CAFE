@@ -1,79 +1,117 @@
 //
 //  AuthenticationService.swift
-//  kopion
+//  kopion / Nucleo / Red
 //
-//  Adaptador de autenticación consumido por el módulo Acceso Login.
-//  Delega login, registro, perfil, verificación por enlace y restablecimiento
-//  de contraseña a AuthManager para usar Firebase Auth + Firestore.
+//  Adaptador entre el módulo AccesoLogin y AuthManager.
+//  Traduce los perfiles de UI (CustomerLoginProfile, StaffLoginProfile)
+//  a las llamadas de AuthManager con Firebase Auth + Firestore.
 //
 
 import Foundation
 
-/// Errores específicos del flujo de autenticación local del módulo.
-enum AuthenticationError: Error, LocalizedError, Equatable {
-    case invalidEmail
-    case invalidPassword
-    case unauthorizedRole
+// MARK: - Errores de validación local
+
+/// Errores de validación que se detectan antes de llamar a Firebase.
+enum ErrorAutenticacion: Error, LocalizedError, Equatable {
+    case correoInvalido
+    case contrasenaCorta
+    case rolNoAutorizado
 
     var errorDescription: String? {
         switch self {
-        case .invalidEmail:
+        case .correoInvalido:
             return "Escribe un correo válido."
-        case .invalidPassword:
+        case .contrasenaCorta:
             return "La contraseña debe tener al menos 6 caracteres."
-        case .unauthorizedRole:
+        case .rolNoAutorizado:
             return "Tu cuenta no tiene permisos para este acceso."
         }
     }
 }
 
-/// Contrato para cambiar la implementación real por mocks en pruebas.
+// MARK: - Protocolo
+
+/// Contrato del servicio de autenticación.
+/// Permite sustituir la implementación real por mocks en pruebas unitarias.
 protocol AuthenticationServicing: Sendable {
-    func signInCustomer(profile: CustomerLoginProfile, password: String) async throws -> AuthSession
-    func registerCustomer(profile: CustomerLoginProfile, password: String) async throws -> AuthSession
-    func signInStaff(profile: StaffLoginProfile, password: String) async throws -> AuthSession
-    func registerStaffRequest(profile: StaffLoginProfile, password: String) async throws -> AuthSession
-    func sendPasswordReset(to email: String) async throws
+    /// Error del último intento de envío de correo de verificación. nil = sin error.
+    var errorVerificacionCorreo: Error? { get }
+
+    func iniciarSesionCliente(perfil: CustomerLoginProfile, contrasena: String) async throws -> AuthSession
+    func registrarCliente(perfil: CustomerLoginProfile, contrasena: String, escuela: UserProfileEscuela, sucursal: UserProfileBranch) async throws -> AuthSession
+    func iniciarSesionPersonal(perfil: StaffLoginProfile, contrasena: String) async throws -> AuthSession
+    func registrarSolicitudPersonal(perfil: StaffLoginProfile, contrasena: String) async throws -> AuthSession
+    func iniciarSesionConGoogle(rol: UserProfileRole, sucursal: UserProfileBranch) async throws -> AuthSession
+    func enviarCorreoRestablecimiento(a correo: String) async throws
 }
 
-/// Implementación real respaldada por Firebase.
+// MARK: - Implementación real
+
+/// Implementación real que delega todas las operaciones a AuthManager con Firebase.
 struct AuthenticationService: AuthenticationServicing {
+
+    /// Refleja el error de verificación que AuthManager capturó sin interrumpir el registro.
+    var errorVerificacionCorreo: Error? {
+        AuthManager.shared.errorVerificacionCorreo
+    }
+
     /// Inicia sesión de cliente existente y recupera su perfil desde Firestore.
-    func signInCustomer(profile: CustomerLoginProfile, password: String) async throws -> AuthSession {
-        let userProfile = try await AuthManager.shared.signIn(email: profile.email, password: password)
-        return userProfile.authSession
-    }
-
-    /// Crea cuenta de cliente en Firebase Auth, guarda /users/{uid} y manda enlace de verificación.
-    func registerCustomer(profile: CustomerLoginProfile, password: String) async throws -> AuthSession {
-        let userProfile = try await AuthManager.shared.signUp(
-            email: profile.email,
-            password: password,
-            role: .cliente,
-            sucursal: .ningunaCliente
+    func iniciarSesionCliente(perfil: CustomerLoginProfile, contrasena: String) async throws -> AuthSession {
+        let perfilUsuario = try await AuthManager.shared.iniciarSesion(
+            correo: perfil.email,
+            contrasena: contrasena
         )
-        return userProfile.authSession
+        return perfilUsuario.sesionAutenticada
     }
 
-    /// Inicia sesión de personal y usa Firestore para conocer rol y sucursal reales.
-    func signInStaff(profile: StaffLoginProfile, password: String) async throws -> AuthSession {
-        let userProfile = try await AuthManager.shared.signIn(email: profile.email, password: password)
-        return userProfile.authSession
-    }
-
-    /// Registra una solicitud inicial de empleado como Colaborador y manda enlace de verificación.
-    func registerStaffRequest(profile: StaffLoginProfile, password: String) async throws -> AuthSession {
-        let userProfile = try await AuthManager.shared.signUp(
-            email: profile.email,
-            password: password,
-            role: .colaborador,
-            sucursal: UserProfileBranch(branch: profile.branch)
+    /// Crea cuenta de cliente en Firebase Auth, guarda /users/{uid} con escuela y sucursal derivada, y envía correo de verificación.
+    func registrarCliente(perfil: CustomerLoginProfile, contrasena: String, escuela: UserProfileEscuela, sucursal: UserProfileBranch) async throws -> AuthSession {
+        let perfilUsuario = try await AuthManager.shared.registrar(
+            correo:     perfil.email,
+            contrasena: contrasena,
+            nombre:     perfil.firstName,
+            apellidos:  perfil.lastName,
+            rol:        .cliente,
+            sucursal:   sucursal,
+            escuela:    escuela
         )
-        return userProfile.authSession
+        return perfilUsuario.sesionAutenticada
     }
 
-    /// Envía correo real de restablecimiento de contraseña mediante Firebase Auth.
-    func sendPasswordReset(to email: String) async throws {
-        try await AuthManager.shared.sendPasswordReset(email: email)
+    /// Inicia sesión de personal (colaborador, editor, administrador) y recupera su perfil de Firestore.
+    func iniciarSesionPersonal(perfil: StaffLoginProfile, contrasena: String) async throws -> AuthSession {
+        let perfilUsuario = try await AuthManager.shared.iniciarSesion(
+            correo: perfil.email,
+            contrasena: contrasena
+        )
+        return perfilUsuario.sesionAutenticada
+    }
+
+    /// Registra una solicitud de cuenta de sucursal como Colaborador y envía correo de verificación.
+    /// La dueña puede cambiar el rol desde el panel de administración después de verificar al empleado.
+    func registrarSolicitudPersonal(perfil: StaffLoginProfile, contrasena: String) async throws -> AuthSession {
+        let perfilUsuario = try await AuthManager.shared.registrar(
+            correo:    perfil.email,
+            contrasena: contrasena,
+            nombre:    perfil.firstName,
+            apellidos: perfil.lastName,
+            rol:       .colaborador,
+            sucursal:  UserProfileBranch(sucursal: perfil.branch)
+        )
+        return perfilUsuario.sesionAutenticada
+    }
+
+    /// Inicia sesión con Google OAuth y devuelve la sesión con rol y sucursal del perfil de Firestore.
+    func iniciarSesionConGoogle(rol: UserProfileRole, sucursal: UserProfileBranch) async throws -> AuthSession {
+        let perfilUsuario = try await AuthManager.shared.iniciarSesionConGoogle(
+            rol: rol,
+            sucursal: sucursal
+        )
+        return perfilUsuario.sesionAutenticada
+    }
+
+    /// Envía un correo de restablecimiento de contraseña al correo indicado.
+    func enviarCorreoRestablecimiento(a correo: String) async throws {
+        try await AuthManager.shared.enviarCorreoRestablecimiento(correo: correo)
     }
 }

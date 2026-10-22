@@ -2,8 +2,9 @@
 //  AuthManager.swift
 //  kopion
 //
-//  Capa de servicio responsable de Firebase Auth y Firestore.
-//  Mantiene la UI lejos de Firebase y expone operaciones async/await limpias.
+//  Capa central de autenticación: Firebase Auth + Firestore.
+//  Mantiene la UI completamente separada de Firebase y expone
+//  operaciones limpias con async/await en español.
 //
 
 import Combine
@@ -11,234 +12,323 @@ import FirebaseAuth
 import FirebaseFirestore
 import Foundation
 
-/// Errores propios de la capa de autenticación y perfil.
+// MARK: - Errores de autenticación
+
+/// Errores propios de la capa de autenticación y perfil de usuario.
 enum AuthManagerError: Error, LocalizedError, Equatable {
-    case missingAuthResult
-    case missingUserProfile
-    case userProfileNotFound
+    case sinResultadoDeFirebase
+    case perfilIncompleto
+    case perfilNoEncontrado
 
     var errorDescription: String? {
         switch self {
-        case .missingAuthResult:
+        case .sinResultadoDeFirebase:
             return "No fue posible obtener la sesión de Firebase."
-        case .missingUserProfile:
+        case .perfilIncompleto:
             return "El perfil del usuario está incompleto."
-        case .userProfileNotFound:
+        case .perfilNoEncontrado:
             return "No encontramos el perfil del usuario en la base de datos."
         }
     }
 }
 
-/// Contrato para inyectar autenticación real o mocks en ViewModels.
-protocol AuthManaging: AnyObject {
-    var currentUser: UserProfile? { get }
+/// Error con mensaje personalizado para mostrar directamente en la UI.
+struct MensajeDeError: Error, LocalizedError, Equatable {
+    let mensaje: String
 
-    func signUp(email: String, password: String, role: UserProfileRole, sucursal: UserProfileBranch) async throws -> UserProfile
-    func signIn(email: String, password: String) async throws -> UserProfile
-    func signOut() throws
-    func sendPasswordReset(email: String) async throws
+    init(_ mensaje: String) {
+        self.mensaje = mensaje
+    }
+
+    var errorDescription: String? { mensaje }
 }
 
+// MARK: - Protocolo
+
+/// Contrato que permite inyectar autenticación real o mocks en los ViewModels.
+protocol AuthManaging: AnyObject {
+    /// Usuario autenticado actualmente. nil = sin sesión activa.
+    var usuarioActual: UserProfile? { get }
+
+    /// Error del último intento de envío de correo de verificación.
+    /// nil = sin error o no intentado aún.
+    var errorVerificacionCorreo: Error? { get }
+
+    func registrar(correo: String, contrasena: String, nombre: String, apellidos: String, rol: UserProfileRole, sucursal: UserProfileBranch, escuela: UserProfileEscuela?) async throws -> UserProfile
+    func iniciarSesion(correo: String, contrasena: String) async throws -> UserProfile
+    func iniciarSesionConGoogle(rol: UserProfileRole, sucursal: UserProfileBranch) async throws -> UserProfile
+    func cerrarSesion() throws
+    func enviarCorreoRestablecimiento(correo: String) async throws
+    func enviarVerificacionCorreo() async throws
+}
+
+// MARK: - Implementación
+
 /// Manager central de Firebase Auth + Firestore.
+/// @MainActor garantiza que todas las actualizaciones de @Published ocurran en el hilo principal.
 @MainActor
 final class AuthManager: ObservableObject, AuthManaging {
+
+    /// Instancia compartida para toda la app.
     static let shared = AuthManager()
 
-    @Published private(set) var currentUser: UserProfile?
+    /// Usuario autenticado actualmente. SwiftUI observa este valor para navegar automáticamente.
+    @Published private(set) var usuarioActual: UserProfile?
+
+    /// Error del último intento de envío de correo de verificación.
+    private(set) var errorVerificacionCorreo: Error?
 
     private let auth: Auth
     private let firestore: Firestore
-    private var authStateHandle: AuthStateDidChangeListenerHandle?
+
+    /// Referencia al listener de estado de sesión para poder cancelarlo en deinit.
+    private var manejadorEstadoAuth: AuthStateDidChangeListenerHandle?
 
     init(auth: Auth = Auth.auth(), firestore: Firestore = Firestore.firestore()) {
-        self.auth = auth
+        self.auth      = auth
         self.firestore = firestore
-        observeAuthState()
+        observarEstadoDeSesion()
     }
 
     deinit {
-        if let authStateHandle {
-            auth.removeStateDidChangeListener(authStateHandle)
+        if let manejadorEstadoAuth {
+            auth.removeStateDidChangeListener(manejadorEstadoAuth)
         }
     }
 
-    /// Crea usuario en Firebase Auth y después crea /users/{uid} en Firestore.
-    func signUp(
-        email: String,
-        password: String,
-        role: UserProfileRole,
-        sucursal: UserProfileBranch
+    // MARK: - Registro
+
+    /// Crea un usuario en Firebase Auth, guarda su perfil en Firestore /users/{uid}
+    /// y envía el correo de verificación.
+    /// El envío del correo NO bloquea el registro: si falla, se guarda en errorVerificacionCorreo
+    /// para que la UI lo muestre sin impedir que el usuario entre a la app.
+    func registrar(
+        correo: String,
+        contrasena: String,
+        nombre: String,
+        apellidos: String,
+        rol: UserProfileRole,
+        sucursal: UserProfileBranch,
+        escuela: UserProfileEscuela? = nil
     ) async throws -> UserProfile {
         do {
-            let result = try await createFirebaseUser(email: email, password: password)
-            let profile = UserProfile(
-                id: result.user.uid,
-                email: email,
-                role: role,
-                sucursal: sucursal
+            let resultado = try await crearUsuarioFirebase(correo: correo, contrasena: contrasena)
+
+            let perfil = UserProfile(
+                id:        resultado.user.uid,
+                correo:    correo,
+                nombre:    nombre,
+                apellidos: apellidos,
+                rol:       rol,
+                sucursal:  sucursal,
+                escuela:   escuela
             )
-            try await saveUserProfile(profile)
-            currentUser = profile
-            return profile
+            try await guardarPerfil(perfil)
+
+            // Paso 3: Intentar enviar correo de verificación.
+            // Si falla, la cuenta ya existe y el usuario puede reenviar después.
+            do {
+                try await enviarVerificacionCorreo()
+            } catch {
+                errorVerificacionCorreo = traducirErrorFirebase(error)
+            }
+
+            usuarioActual = perfil
+            return perfil
         } catch {
-            throw mapFirebaseError(error)
+            throw traducirErrorFirebase(error)
         }
     }
 
-    /// Autentica en Firebase Auth y recupera el documento /users/{uid} para conocer rol y sucursal.
-    func signIn(email: String, password: String) async throws -> UserProfile {
+    // MARK: - Inicio de sesión con correo
+
+    /// Autentica con correo y contraseña, luego recupera el perfil de Firestore
+    /// para conocer el rol y la sucursal reales del usuario.
+    func iniciarSesion(correo: String, contrasena: String) async throws -> UserProfile {
         do {
-            let result = try await signInFirebaseUser(email: email, password: password)
-            let profile = try await fetchUserProfile(uid: result.user.uid)
-            currentUser = profile
-            return profile
+            let resultado = try await autenticarUsuarioFirebase(correo: correo, contrasena: contrasena)
+            let perfil    = try await obtenerPerfil(uid: resultado.user.uid)
+            usuarioActual = perfil
+            return perfil
         } catch {
-            throw mapFirebaseError(error)
+            throw traducirErrorFirebase(error)
         }
     }
 
-    /// Cierra sesión local y Firebase Auth.
-    func signOut() throws {
+    // MARK: - Inicio de sesión con Google
+
+    /// Inicia sesión con Google OAuth delegando el flujo a GoogleSignInService.
+    /// Actualiza usuarioActual con el perfil resultante de Firestore.
+    func iniciarSesionConGoogle(
+        rol: UserProfileRole = .cliente,
+        sucursal: UserProfileBranch = .ningunaCliente
+    ) async throws -> UserProfile {
+        do {
+            let resultado = try await GoogleSignInService.shared.iniciarSesion(rol: rol, sucursal: sucursal)
+            usuarioActual = resultado.perfil
+            return resultado.perfil
+        } catch let error as ErrorGoogleSignIn {
+            // Cancelación silenciosa: el usuario cerró el sheet sin elegir cuenta.
+            if case .cancelado = error { throw error }
+            throw MensajeDeError(error.localizedDescription)
+        } catch {
+            throw traducirErrorFirebase(error)
+        }
+    }
+
+    // MARK: - Cierre de sesión
+
+    /// Cierra la sesión en Firebase Auth y limpia el usuario local.
+    func cerrarSesion() throws {
         do {
             try auth.signOut()
-            currentUser = nil
+            usuarioActual = nil
         } catch {
-            throw mapFirebaseError(error)
+            throw traducirErrorFirebase(error)
         }
     }
 
-    /// Envía correo real de recuperación de contraseña desde Firebase Auth.
-    func sendPasswordReset(email: String) async throws {
+    // MARK: - Correo de restablecimiento
+
+    /// Envía un correo de restablecimiento de contraseña al correo indicado.
+    func enviarCorreoRestablecimiento(correo: String) async throws {
         do {
-            try await withCheckedThrowingContinuation { continuation in
-                auth.sendPasswordReset(withEmail: email) { error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume(returning: ())
-                    }
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                auth.sendPasswordReset(withEmail: correo) { error in
+                    if let error { cont.resume(throwing: error) }
+                    else         { cont.resume(returning: ()) }
                 }
             }
         } catch {
-            throw mapFirebaseError(error)
+            throw traducirErrorFirebase(error)
         }
     }
 
-    /// Escucha cambios de sesión y refresca el perfil si Firebase restaura usuario al abrir la app.
-    private func observeAuthState() {
-        authStateHandle = auth.addStateDidChangeListener { [weak self] _, firebaseUser in
+    // MARK: - Verificación de correo
+
+    /// Envía el enlace de verificación al correo del usuario autenticado actualmente.
+    func enviarVerificacionCorreo() async throws {
+        guard let usuarioFirebase = auth.currentUser else {
+            throw AuthManagerError.sinResultadoDeFirebase
+        }
+
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                usuarioFirebase.sendEmailVerification { error in
+                    if let error { cont.resume(throwing: error) }
+                    else         { cont.resume(returning: ()) }
+                }
+            }
+        } catch {
+            throw traducirErrorFirebase(error)
+        }
+    }
+
+    // MARK: - Observador de estado de sesión
+
+    /// Escucha cambios de sesión de Firebase.
+    /// Cuando la app se abre y Firebase restaura una sesión previa,
+    /// este listener recupera el perfil de Firestore automáticamente.
+    private func observarEstadoDeSesion() {
+        manejadorEstadoAuth = auth.addStateDidChangeListener { [weak self] _, usuarioFirebase in
             guard let self else { return }
 
             Task { @MainActor in
-                guard let uid = firebaseUser?.uid else {
-                    self.currentUser = nil
+                guard let uid = usuarioFirebase?.uid else {
+                    self.usuarioActual = nil
                     return
                 }
-
-                self.currentUser = try? await self.fetchUserProfile(uid: uid)
+                self.usuarioActual = try? await self.obtenerPerfil(uid: uid)
             }
         }
     }
 
-    private func createFirebaseUser(email: String, password: String) async throws -> AuthDataResult {
-        try await withCheckedThrowingContinuation { continuation in
-            auth.createUser(withEmail: email, password: password) { result, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if let result {
-                    continuation.resume(returning: result)
-                } else {
-                    continuation.resume(throwing: AuthManagerError.missingAuthResult)
-                }
+    // MARK: - Helpers privados de Firebase
+
+    /// Crea un usuario nuevo en Firebase Auth con correo y contraseña.
+    private func crearUsuarioFirebase(correo: String, contrasena: String) async throws -> AuthDataResult {
+        try await withCheckedThrowingContinuation { cont in
+            auth.createUser(withEmail: correo, password: contrasena) { resultado, error in
+                if let error     { cont.resume(throwing: error) }
+                else if let resultado { cont.resume(returning: resultado) }
+                else             { cont.resume(throwing: AuthManagerError.sinResultadoDeFirebase) }
             }
         }
     }
 
-    private func signInFirebaseUser(email: String, password: String) async throws -> AuthDataResult {
-        try await withCheckedThrowingContinuation { continuation in
-            auth.signIn(withEmail: email, password: password) { result, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if let result {
-                    continuation.resume(returning: result)
-                } else {
-                    continuation.resume(throwing: AuthManagerError.missingAuthResult)
-                }
+    /// Autentica un usuario existente en Firebase Auth con correo y contraseña.
+    private func autenticarUsuarioFirebase(correo: String, contrasena: String) async throws -> AuthDataResult {
+        try await withCheckedThrowingContinuation { cont in
+            auth.signIn(withEmail: correo, password: contrasena) { resultado, error in
+                if let error     { cont.resume(throwing: error) }
+                else if let resultado { cont.resume(returning: resultado) }
+                else             { cont.resume(throwing: AuthManagerError.sinResultadoDeFirebase) }
             }
         }
     }
 
-    private func saveUserProfile(_ profile: UserProfile) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            firestore.collection("users").document(profile.id).setData(profile.firestoreData) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
+    /// Guarda el perfil del usuario en Firestore en la colección "users".
+    private func guardarPerfil(_ perfil: UserProfile) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            firestore.collection("users").document(perfil.id).setData(perfil.datosFirestore) { error in
+                if let error { cont.resume(throwing: error) }
+                else         { cont.resume(returning: ()) }
             }
         }
     }
 
-    private func fetchUserProfile(uid: String) async throws -> UserProfile {
-        let snapshot = try await withCheckedThrowingContinuation { continuation in
-            firestore.collection("users").document(uid).getDocument { snapshot, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if let snapshot {
-                    continuation.resume(returning: snapshot)
-                } else {
-                    continuation.resume(throwing: AuthManagerError.userProfileNotFound)
-                }
+    /// Recupera el perfil del usuario desde Firestore usando su UID.
+    private func obtenerPerfil(uid: String) async throws -> UserProfile {
+        let documento: DocumentSnapshot = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<DocumentSnapshot, Error>) in
+            firestore.collection("users").document(uid).getDocument { documento, error in
+                if let error        { cont.resume(throwing: error) }
+                else if let documento { cont.resume(returning: documento) }
+                else                { cont.resume(throwing: AuthManagerError.perfilNoEncontrado) }
             }
         }
 
-        guard snapshot.exists, let data = snapshot.data() else {
-            throw AuthManagerError.userProfileNotFound
+        guard documento.exists, let datos = documento.data() else {
+            throw AuthManagerError.perfilNoEncontrado
         }
 
-        return try UserProfile(id: snapshot.documentID, data: data)
+        return try UserProfile(id: documento.documentID, datos: datos)
     }
 
-    /// Traduce errores frecuentes de Firebase Auth a mensajes claros para la UI.
-    private func mapFirebaseError(_ error: Error) -> Error {
-        if let authManagerError = error as? AuthManagerError {
-            return authManagerError
-        }
+    // MARK: - Traducción de errores de Firebase
+
+    /// Convierte errores de Firebase Auth a mensajes en español con código técnico para diagnóstico.
+    private func traducirErrorFirebase(_ error: Error) -> Error {
+        // Si ya es un error propio, lo devolvemos sin envolver.
+        if let propio = error as? AuthManagerError  { return propio }
+        if let propio = error as? MensajeDeError    { return propio }
 
         let nsError = error as NSError
-        guard let code = AuthErrorCode(rawValue: nsError.code) else {
-            return error
+        let sufijo  = " [Firebase \(nsError.code)]"
+
+        guard let codigo = AuthErrorCode(rawValue: nsError.code) else {
+            return MensajeDeError(nsError.localizedDescription + sufijo)
         }
 
-        switch code {
+        switch codigo {
         case .emailAlreadyInUse:
-            return AuthenticationErrorMessage("Ese correo ya está registrado.")
+            return MensajeDeError("Ese correo ya está registrado." + sufijo)
         case .weakPassword:
-            return AuthenticationErrorMessage("La contraseña es muy débil. Usa al menos 6 caracteres.")
+            return MensajeDeError("La contraseña es muy débil. Usa al menos 6 caracteres." + sufijo)
         case .invalidEmail:
-            return AuthenticationErrorMessage("Escribe un correo válido.")
+            return MensajeDeError("Escribe un correo válido." + sufijo)
         case .wrongPassword, .userNotFound, .invalidCredential:
-            return AuthenticationErrorMessage("Correo o contraseña incorrectos.")
+            return MensajeDeError("Correo o contraseña incorrectos." + sufijo)
         case .networkError:
-            return AuthenticationErrorMessage("No hay conexión. Inténtalo de nuevo.")
+            return MensajeDeError("Sin conexión a internet. Inténtalo de nuevo." + sufijo)
         case .tooManyRequests:
-            return AuthenticationErrorMessage("Demasiados intentos. Espera unos minutos.")
+            return MensajeDeError("Demasiados intentos. Espera unos minutos." + sufijo)
+        case .operationNotAllowed:
+            return MensajeDeError(
+                "El proveedor Email/Contraseña no está habilitado. " +
+                "Ve a Firebase Console → Authentication → Método de acceso y actívalo." + sufijo
+            )
         default:
-            return AuthenticationErrorMessage(nsError.localizedDescription)
+            return MensajeDeError(nsError.localizedDescription + sufijo)
         }
-    }
-}
-
-/// Error simple con mensaje localizado para presentar directamente en la UI.
-struct AuthenticationErrorMessage: Error, LocalizedError, Equatable {
-    let message: String
-
-    init(_ message: String) {
-        self.message = message
-    }
-
-    var errorDescription: String? {
-        message
     }
 }

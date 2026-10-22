@@ -1,105 +1,135 @@
 //
 //  AccesoLoginView.swift
-//  kopion
+//  kopion / Modulos / AccesoLogin
 //
-//  Módulo inicial de acceso.
-//  La app abre aquí: primero se muestra login de cliente con correo y contraseña.
-//  El acceso de sucursal queda en una segunda página por deslizamiento horizontal.
-//  El código de correo aparece exclusivamente al crear una cuenta nueva.
+//  Pantalla inicial de la app.
+//  Login único con correo, contraseña y Google.
+//  El rol real se obtiene desde Firebase/Firestore después de iniciar sesión.
 //
 
 import SwiftUI
 
-/// Tipo de registro que determina qué formulario completo se muestra.
+/// Tipo de registro que determina qué formulario se muestra en la pantalla de registro.
 enum AccessRegistrationKind: String, CaseIterable, Identifiable {
     case customer
     case staff
 
     var id: String { rawValue }
 
-    var title: String {
+    var titulo: String {
         switch self {
-        case .customer:
-            return "Cliente"
-        case .staff:
-            return "Empleado"
+        case .customer: return "Cliente"
+        case .staff:    return "Empleado"
         }
     }
 }
+
+// MARK: - Vista raíz del módulo
 
 struct AccesoLoginView: View {
     @StateObject private var viewModel = AccesoLoginViewModel()
-    @State private var selectedPage = 0
 
     var body: some View {
-        TabView(selection: $selectedPage) {
-            CustomerLoginPane(viewModel: viewModel)
-                .tag(0)
-
-            StaffLoginPane(viewModel: viewModel)
-                .tag(1)
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .navigationTitle(selectedPage == 0 ? "Kopion" : "Sucursal")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Desliza para acceso de sucursal")
+        PanelLoginCliente(viewModel: viewModel)
+            .navigationTitle("Kopion")
+            .onDisappear { viewModel.cancelar() }
+            .alert("Aviso", isPresented: enlaceError(para: viewModel)) {
+                Button("OK") { viewModel.limpiarError() }
+            } message: {
+                Text(viewModel.mensajeError ?? "")
             }
-        }
-        .onDisappear { viewModel.cancel() }
-        .alert("Aviso", isPresented: errorBinding(for: viewModel)) {
-            Button("OK") { viewModel.clearError() }
-        } message: {
-            Text(viewModel.errorMessage ?? "")
-        }
     }
 }
 
-/// Login visible para clientes: solo correo y contraseña antes de entrar.
-private struct CustomerLoginPane: View {
+// MARK: - Panel de acceso
+
+/// Login único: Firebase determina el rol real del usuario después de autenticar.
+private struct PanelLoginCliente: View {
     @ObservedObject var viewModel: AccesoLoginViewModel
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                LoginHeader(
-                    title: "Bienvenido",
-                    subtitle: "Entra a la tienda virtual con tu correo Gmail."
+
+                EncabezadoLogin(
+                    titulo: "Bienvenido",
+                    subtitulo: "Entra con tu correo o cuenta de Google. Kopion abrirá el menú según tu rol."
                 )
 
+                // Campos de correo y contraseña
                 VStack(spacing: 12) {
-                    TextField("Correo Gmail", text: $viewModel.customerEmail)
+                    TextField("Correo", text: $viewModel.correoCliente)
                         .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
                         .keyboardType(.emailAddress)
                         .textContentType(.emailAddress)
-                    SecureField("Contraseña", text: $viewModel.customerPassword)
-                        .textContentType(.password)
+
+                    CampoContrasenaVisible(
+                        titulo: "Contraseña",
+                        texto: $viewModel.contrasenaCliente,
+                        textContentType: .password
+                    )
                 }
                 .textFieldStyle(.roundedBorder)
 
+                // Botón de inicio de sesión con correo
                 Button {
-                    viewModel.loginCustomer()
+                    viewModel.iniciarSesionCliente()
                 } label: {
                     Label("Entrar", systemImage: "arrow.right.circle")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isSubmitting)
+                .disabled(viewModel.estaEnviando)
 
+                // Botón de inicio de sesión con Google
+                Button {
+                    viewModel.iniciarSesionConGoogle()
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "globe")
+                        Text("Continuar con Google")
+                            .fontWeight(.semibold)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.estaEnviando)
+
+                // Enlace a registro
                 NavigationLink {
-                    RegistroAccesoView(viewModel: viewModel, initialKind: .customer)
+                    VistaRegistro(viewModel: viewModel, tipoInicial: .customer)
                 } label: {
                     Text("¿No tienes cuenta? Regístrate")
                         .font(.subheadline.weight(.semibold))
                 }
 
-                StatusMessageView(message: viewModel.confirmationMessage, isSubmitting: viewModel.isSubmitting)
+                // Restablecimiento de contraseña
+                Button {
+                    viewModel.restablecerContrasenaCliente()
+                } label: {
+                    Text("Restablecer contraseña")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .disabled(viewModel.estaEnviando)
 
-                if let session = viewModel.session, session.role == .customer {
+                // Acceso como invitado
+                NavigationLink {
+                    MenuInternoView()
+                } label: {
+                    Label("Continuar como invitado", systemImage: "person.crop.circle")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+
+                // Indicador de estado
+                VistaEstado(mensaje: viewModel.mensajeConfirmacion, cargando: viewModel.estaEnviando)
+
+                // Confirmación de sesión activa
+                if let sesion = viewModel.sesion, sesion.role == .customer {
                     ModuleRow(
                         title: "Tienda virtual desbloqueada",
-                        detail: session.branch?.displayName ?? "Sucursal asignada por escuela",
+                        detail: sesion.branch?.displayName ?? "Sucursal asignada por escuela",
                         systemImage: "cart.badge.checkmark",
                         tint: .green
                     )
@@ -110,284 +140,309 @@ private struct CustomerLoginPane: View {
     }
 }
 
-/// Login de sucursal oculto en la segunda página por deslizamiento.
-private struct StaffLoginPane: View {
-    @ObservedObject var viewModel: AccesoLoginViewModel
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                LoginHeader(
-                    title: "Acceso de sucursal",
-                    subtitle: "Para empleado, editor o dueña autorizada."
-                )
-
-                VStack(spacing: 12) {
-                    TextField("Correo Gmail", text: $viewModel.staffEmail)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.emailAddress)
-                        .textContentType(.emailAddress)
-                    SecureField("Contraseña", text: $viewModel.staffPassword)
-                        .textContentType(.password)
-                }
-                .textFieldStyle(.roundedBorder)
-
-                Picker("Rol", selection: $viewModel.requestedRole) {
-                    Text(UserRole.collaborator.displayName).tag(UserRole.collaborator)
-                    Text(UserRole.editor.displayName).tag(UserRole.editor)
-                    Text(UserRole.administrator.displayName).tag(UserRole.administrator)
-                }
-                .pickerStyle(.segmented)
-
-                Button {
-                    viewModel.loginStaff()
-                } label: {
-                    Label("Entrar", systemImage: "lock.open")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isSubmitting)
-
-                NavigationLink {
-                    RegistroAccesoView(viewModel: viewModel, initialKind: .staff)
-                } label: {
-                    Text("¿No tienes cuenta? Regístrate")
-                        .font(.subheadline.weight(.semibold))
-                }
-
-                StatusMessageView(message: viewModel.confirmationMessage, isSubmitting: viewModel.isSubmitting)
-
-                if let session = viewModel.session, session.role != .customer {
-                    ModuleRow(
-                        title: session.role.displayName,
-                        detail: "\(session.email) - \(session.branch?.displayName ?? "Sucursal")",
-                        systemImage: "lock.shield",
-                        tint: .green
-                    )
-                }
-            }
-            .padding()
-        }
-    }
-}
+// MARK: - Pantalla de registro
 
 /// Pantalla de registro completo separada del login inicial.
-private struct RegistroAccesoView: View {
+private struct VistaRegistro: View {
     @ObservedObject var viewModel: AccesoLoginViewModel
-    let initialKind: AccessRegistrationKind
+    let tipoInicial: AccessRegistrationKind
 
     var body: some View {
         Form {
+            // Selector de tipo de cuenta
             Section("Tipo de cuenta") {
-                Picker("Cuenta", selection: $viewModel.registrationKind) {
-                    ForEach(AccessRegistrationKind.allCases) { kind in
-                        Text(kind.title).tag(kind)
+                Picker("Cuenta", selection: $viewModel.tipoRegistro) {
+                    ForEach(AccessRegistrationKind.allCases) { tipo in
+                        Text(tipo.titulo).tag(tipo)
                     }
                 }
                 .pickerStyle(.segmented)
             }
 
-            if viewModel.registrationKind == .customer {
-                CustomerRegistrationSection(viewModel: viewModel)
+            // Formulario según tipo seleccionado
+            if viewModel.tipoRegistro == .customer {
+                SeccionRegistroCliente(viewModel: viewModel)
             } else {
-                StaffRegistrationSection(viewModel: viewModel)
+                SeccionRegistroPersonal(viewModel: viewModel)
             }
 
-            RegistrationActionsSection(viewModel: viewModel)
+            // Botón de acción
+            SeccionAccionesRegistro(viewModel: viewModel)
 
-            if let message = viewModel.confirmationMessage {
+            // Indicador de carga
+            if viewModel.estaEnviando {
                 Section("Estado") {
-                    Text(message)
-                        .foregroundStyle(.secondary)
+                    ProgressView("Creando cuenta…")
+                }
+            }
+
+            // Mensaje de confirmación
+            if let mensaje = viewModel.mensajeConfirmacion {
+                Section("Estado") {
+                    Text(mensaje).foregroundStyle(.secondary)
+                }
+            }
+
+            // Mensaje de error
+            if let error = viewModel.mensajeError {
+                Section("Error") {
+                    Text(error).foregroundStyle(.red)
                 }
             }
         }
         .navigationTitle("Registro")
         .onAppear {
-            viewModel.registrationKind = initialKind
-            viewModel.isRegisteringStaff = initialKind == .staff
+            viewModel.tipoRegistro = tipoInicial
+            viewModel.estaRegistrandoPersonal = tipoInicial == .staff
         }
-        .onChange(of: viewModel.registrationKind) { _, newValue in
-            viewModel.isRegisteringStaff = newValue == .staff
+        .onChange(of: viewModel.tipoRegistro) { _, nuevo in
+            viewModel.estaRegistrandoPersonal = nuevo == .staff
         }
     }
 }
 
-/// Datos completos para cliente.
-private struct CustomerRegistrationSection: View {
+// MARK: - Sección de datos del cliente
+
+private struct SeccionRegistroCliente: View {
     @ObservedObject var viewModel: AccesoLoginViewModel
 
     var body: some View {
         Section("Datos del cliente") {
-            TextField("Nombres", text: $viewModel.customerFirstName)
+            TextField("Nombres", text: $viewModel.nombreCliente)
                 .textContentType(.givenName)
                 .textInputAutocapitalization(.words)
-            TextField("Apellidos", text: $viewModel.customerLastName)
+
+            TextField("Apellidos", text: $viewModel.apellidosCliente)
                 .textContentType(.familyName)
                 .textInputAutocapitalization(.words)
-            TextField("Correo Gmail", text: $viewModel.customerEmail)
+
+            TextField("Correo", text: $viewModel.correoCliente)
                 .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
                 .keyboardType(.emailAddress)
                 .textContentType(.emailAddress)
-            SecureField("Contraseña", text: $viewModel.customerPassword)
+
+            SecureField("Contraseña (mín. 6 caracteres)", text: $viewModel.contrasenaCliente)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
                 .textContentType(.newPassword)
 
-            Picker("Tipo", selection: $viewModel.customerType) {
-                ForEach(CustomerType.allCases) { type in
-                    Text(type.displayName).tag(type)
+            Picker("Tipo", selection: $viewModel.tipoCliente) {
+                ForEach(CustomerType.allCases) { tipo in
+                    Text(tipo.displayName).tag(tipo)
                 }
             }
 
-            Picker("Escuela", selection: $viewModel.selectedSchool) {
-                ForEach(School.allCases) { school in
-                    Text(school.displayName).tag(school)
+            Picker("Escuela", selection: $viewModel.escuelaSeleccionada) {
+                ForEach(School.allCases) { escuela in
+                    Text(escuela.displayName).tag(escuela)
                 }
-            }
-        }
-
-        if viewModel.hasSentCustomerCode {
-            Section("Verificación por correo") {
-                TextField("Código de correo", text: $viewModel.customerCode)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
             }
         }
     }
 }
 
-/// Datos completos para empleado/editor/dueña.
-private struct StaffRegistrationSection: View {
+// MARK: - Sección de datos del personal
+
+private struct SeccionRegistroPersonal: View {
     @ObservedObject var viewModel: AccesoLoginViewModel
 
     var body: some View {
+        // Filtro de seguridad: código de acceso requerido antes de mostrar el formulario.
         Section("Filtro de seguridad") {
-            SecureField("Contraseña de registro", text: $viewModel.staffRegistrationAccessCode)
+            TextField("Código de acceso", text: $viewModel.codigoAccesoRegistro)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
                 .keyboardType(.numberPad)
-            Text("Para registrar cuentas de sucursal, escribe la clave autorizada.")
+
+            Text("Escribe la clave autorizada para registrar cuentas de sucursal.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
 
-        if viewModel.hasValidStaffRegistrationAccessCode {
+        // Formulario visible solo cuando el código es correcto.
+        if viewModel.codigoAccesoValido {
             Section("Datos de sucursal") {
-                TextField("Nombres", text: $viewModel.staffFirstName)
+                TextField("Nombres", text: $viewModel.nombrePersonal)
                     .textContentType(.givenName)
                     .textInputAutocapitalization(.words)
-                TextField("Apellidos", text: $viewModel.staffLastName)
+
+                TextField("Apellidos", text: $viewModel.apellidosPersonal)
                     .textContentType(.familyName)
                     .textInputAutocapitalization(.words)
-                TextField("Correo Gmail", text: $viewModel.staffEmail)
+
+                TextField("Correo", text: $viewModel.correoPersonal)
                     .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
                     .keyboardType(.emailAddress)
                     .textContentType(.emailAddress)
-                SecureField("Contraseña", text: $viewModel.staffPassword)
+
+                SecureField("Contraseña (mín. 6 caracteres)", text: $viewModel.contrasenaPersonal)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
                     .textContentType(.newPassword)
 
-                Picker("Sucursal", selection: $viewModel.selectedBranch) {
-                    ForEach(Branch.allCases) { branch in
-                        Text(branch.displayName).tag(branch)
+                Picker("Sucursal", selection: $viewModel.sucursalSeleccionada) {
+                    ForEach(Branch.allCases) { sucursal in
+                        Text(sucursal.displayName).tag(sucursal)
                     }
                 }
 
-                Picker("Rol solicitado", selection: $viewModel.requestedRole) {
+                Picker("Rol solicitado", selection: $viewModel.rolSolicitado) {
                     Text(UserRole.collaborator.displayName).tag(UserRole.collaborator)
                     Text(UserRole.editor.displayName).tag(UserRole.editor)
                     Text(UserRole.administrator.displayName).tag(UserRole.administrator)
                 }
 
-                Text("Las cuentas nuevas de sucursal se guardan como Colaborador hasta autorización.")
+                Text("Las cuentas nuevas se guardan como Colaborador hasta que la dueña las autorice.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            }
-
-            if viewModel.hasSentStaffCode {
-                Section("Verificación por correo") {
-                    TextField("Código de correo", text: $viewModel.staffCode)
-                        .keyboardType(.numberPad)
-                        .textContentType(.oneTimeCode)
-                }
             }
         }
     }
 }
 
-/// Acciones progresivas de registro: primero enviar código, luego crear cuenta.
-private struct RegistrationActionsSection: View {
+// MARK: - Sección de acciones de registro
+
+private struct SeccionAccionesRegistro: View {
     @ObservedObject var viewModel: AccesoLoginViewModel
 
     var body: some View {
         Section {
-            if viewModel.registrationKind == .customer {
+            if viewModel.tipoRegistro == .customer {
                 Button {
-                    viewModel.sendCustomerCode()
+                    viewModel.crearCuentaCliente()
                 } label: {
-                    Label("Enviar código Gmail", systemImage: "envelope")
+                    Label("Crear cuenta", systemImage: "person.badge.plus")
                 }
-                .disabled(viewModel.isSubmitting)
-
-                if viewModel.canCreateCustomerAccount {
-                    Button {
-                        viewModel.createCustomerAccount()
-                    } label: {
-                        Label("Crear cuenta", systemImage: "person.badge.plus")
-                    }
-                    .disabled(viewModel.isSubmitting)
-                }
+                .disabled(viewModel.estaEnviando)
             } else {
                 Button {
-                    viewModel.isRegisteringStaff = true
-                    viewModel.sendStaffCode()
+                    viewModel.estaRegistrandoPersonal = true
+                    viewModel.crearCuentaPersonal()
                 } label: {
-                    Label("Enviar código Gmail", systemImage: "envelope")
+                    Label("Crear cuenta", systemImage: "person.badge.plus")
                 }
-                .disabled(viewModel.isSubmitting || !viewModel.hasValidStaffRegistrationAccessCode)
-
-                if viewModel.canCreateStaffAccount {
-                    Button {
-                        viewModel.isRegisteringStaff = true
-                        viewModel.createStaffAccount()
-                    } label: {
-                        Label("Crear cuenta", systemImage: "person.badge.plus")
-                    }
-                    .disabled(viewModel.isSubmitting)
-                }
+                .disabled(viewModel.estaEnviando)
             }
         }
     }
 }
 
-/// Encabezado compacto para formularios de acceso.
-private struct LoginHeader: View {
-    let title: String
-    let subtitle: String
+// MARK: - Componentes de UI compartidos
+
+/// Encabezado compacto con título y subtítulo para formularios de acceso.
+private struct EncabezadoLogin: View {
+    let titulo: String
+    let subtitulo: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
+            Text(titulo)
                 .font(.largeTitle.weight(.bold))
-            Text(subtitle)
+            Text(subtitulo)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
     }
 }
 
-/// Estado visible para envío de código, validación y éxito.
-private struct StatusMessageView: View {
-    let message: String?
-    let isSubmitting: Bool
+/// Campo de contraseña con botón para mostrar u ocultar el texto escrito.
+private struct CampoContrasenaVisible: View {
+    let titulo: String
+    @Binding var texto: String
+    let textContentType: UITextContentType
+    @State private var muestraContrasena = false
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Group {
+                if muestraContrasena {
+                    TextField(titulo, text: $texto)
+                } else {
+                    SecureField(titulo, text: $texto)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .textContentType(textContentType)
+            .padding(.trailing, 42)
+
+            Button {
+                muestraContrasena.toggle()
+            } label: {
+                Image(systemName: muestraContrasena ? "eye.slash" : "eye")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(muestraContrasena ? "Ocultar contraseña" : "Mostrar contraseña")
+        }
+    }
+}
+
+/// Indicador de estado: muestra ProgressView durante la carga y el mensaje de confirmación.
+private struct VistaEstado: View {
+    let mensaje: String?
+    let cargando: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if isSubmitting {
-                ProgressView("Validando con Google/Gmail")
+            if cargando {
+                ProgressView("Validando…")
             }
-
-            if let message {
-                Text(message)
+            if let mensaje {
+                Text(mensaje)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+// MARK: - Menú de invitado
+
+/// Menú para explorar la app como cliente invitado, sin acceso a módulos internos.
+private struct MenuInternoView: View {
+    var body: some View {
+        List {
+            Section("Modo invitado") {
+                ModuleRow(
+                    title: "Cliente invitado",
+                    detail: "Puedes cotizar, enviar archivos y revisar el catálogo.",
+                    systemImage: "person.crop.circle",
+                    tint: .orange
+                )
+            }
+
+            Section("Módulos") {
+                NavigationLink { CustomerPortalView(usuario: UserProfile(id: "invitado", correo: "invitado@kopion.mx", nombre: "Invitado", rol: .cliente, sucursal: .ningunaCliente)) } label: {
+                    ModuleRow(
+                        title: "Tienda y cotizador",
+                        detail: "Copias, engargolados, enmicados y más",
+                        systemImage: "cart.badge.checkmark",
+                        tint: .pink
+                    )
+                }
+                NavigationLink { PrintPreparationView() } label: {
+                    ModuleRow(
+                        title: "Enviar archivos",
+                        detail: "PDF, Word, JPG a cola de impresión",
+                        systemImage: "doc.richtext",
+                        tint: .purple
+                    )
+                }
+                NavigationLink { CatalogView() } label: {
+                    ModuleRow(
+                        title: "Catálogo",
+                        detail: "Precios y disponibilidad en tiempo real",
+                        systemImage: "shippingbox",
+                        tint: .orange
+                    )
+                }
+            }
+        }
+        .navigationTitle("Kopion")
     }
 }
 

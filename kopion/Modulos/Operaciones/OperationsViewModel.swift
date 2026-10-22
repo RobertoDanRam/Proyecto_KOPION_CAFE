@@ -1,70 +1,55 @@
 //
 //  OperationsViewModel.swift
-//  kopion / Modules / Operations
+//  kopion / Modulos / Operaciones
 //
 //  Lógica del módulo de recepción de mercancía, RRHH y comunicación interna.
-//  Carga en paralelo el checklist de limpieza y las peticiones de insumos.
 //
 
 import Combine
 import Foundation
 
-/// ViewModel de operaciones internas: limpieza, insumos, vales, checador y recepción.
 @MainActor
 final class OperationsViewModel: LoadableViewModel {
 
-    // MARK: - Estado publicado
+    @Published private(set) var tareasLimpieza: [CleaningTask] = []
+    @Published private(set) var solicitudesInsumos: [InternalSupplyRequest] = []
 
-    /// Tareas de limpieza con evidencia fotográfica por turno y sucursal.
-    @Published private(set) var cleaningTasks: [CleaningTask] = []
-
-    /// Peticiones de insumos internos con nivel de urgencia y aprobación de la dueña.
-    @Published private(set) var supplyRequests: [InternalSupplyRequest] = []
-
-    // MARK: - Dependencias
-
-    private let service: OperationsServicing
-    private var task: Task<Void, Never>?
-
-    // MARK: - Init
+    private let servicio: OperationsServicing
+    private var tarea: Task<Void, Never>?
 
     override init() {
-        self.service = OperationsService()
+        self.servicio = OperationsService()
         super.init()
     }
 
-    init(service: OperationsServicing) {
-        self.service = service
+    init(servicio: OperationsServicing) {
+        self.servicio = servicio
         super.init()
     }
 
-    // MARK: - Acciones
+    func cargar() {
+        guard tarea == nil else { return }
+        estaCargando = true
+        mensajeError = nil
 
-    /// Carga limpieza e insumos en paralelo. Ignora llamadas duplicadas.
-    func load() {
-        guard task == nil else { return }
-        isLoading = true
-        errorMessage = nil
-
-        task = Task {
+        tarea = Task {
             do {
-                async let cleaning = service.fetchCleaningTasks()
-                async let supplies = service.fetchSupplyRequests()
-                cleaningTasks = try await cleaning
-                supplyRequests = try await supplies
+                async let limpieza = servicio.fetchCleaningTasks()
+                async let insumos = servicio.fetchSupplyRequests()
+                tareasLimpieza = try await limpieza
+                solicitudesInsumos = try await insumos
             } catch is CancellationError {
             } catch {
-                errorMessage = error.localizedDescription
+                mensajeError = error.localizedDescription
             }
-            isLoading = false
-            task = nil
+            estaCargando = false
+            tarea = nil
         }
     }
 
-    /// Cancela la carga activa al salir de pantalla.
-    func cancel() {
-        task?.cancel()
-        task = nil
-        isLoading = false
+    func cancelar() {
+        tarea?.cancel()
+        tarea = nil
+        estaCargando = false
     }
 }

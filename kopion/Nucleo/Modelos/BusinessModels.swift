@@ -287,3 +287,83 @@ struct AdminDashboardSnapshot: Codable, Hashable, Sendable {
     var topProductNames: [String]
     var pendingQuotes: Int
 }
+
+/// Tipo de cliente para segmentar tienda, CRM y comunicacion.
+enum CustomerType: String, CaseIterable, Identifiable, Codable, Sendable {
+    case student
+    case teacher
+    case other
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .student:
+            return "Alumno"
+        case .teacher:
+            return "Maestro"
+        case .other:
+            return "Otro"
+        }
+    }
+}
+
+/// Escuelas atendidas por Kopion y La Capital del Cafe.
+enum School: String, CaseIterable, Identifiable, Codable, Sendable {
+    case escaSantoTomas
+    case cecyt1
+    case ese
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .escaSantoTomas:
+            return "ESCA - Escuela Superior de Comercio y Administracion Unidad Santo Tomas"
+        case .cecyt1:
+            return "CECyT 1 - Centro de Estudios Cientificos y Tecnologicos No. 1 Gonzalo Vazquez Vela IPN"
+        case .ese:
+            return "ESE - Escuela Superior de Economia"
+        }
+    }
+
+    var linkedBranch: Branch {
+        switch self {
+        case .escaSantoTomas:
+            return .kopionESCA
+        case .cecyt1:
+            return .kopionCECyT1
+        case .ese:
+            return .cafeESE
+        }
+    }
+}
+
+/// Perfil capturado para clientes antes de entrar a tienda virtual.
+struct CustomerLoginProfile: Codable, Hashable, Sendable {
+    var firstName: String
+    var lastName: String
+    var email: String
+    var customerType: CustomerType
+    var school: School
+}
+
+/// Perfil capturado para empleados, editores o dueña desde el registro de sucursal.
+struct StaffLoginProfile: Codable, Hashable, Sendable {
+    var email: String
+    var firstName: String = ""
+    var lastName: String = ""
+    var branch: Branch
+    var requestedRole: UserRole
+}
+
+/// Sesion autenticada que determina a que area entra el usuario.
+struct AuthSession: Identifiable, Codable, Hashable, Sendable {
+    let id: UUID
+    var email: String
+    var role: UserRole
+    var branch: Branch?
+    var school: School?
+    var displayName: String
+    var authenticatedWithGoogle: Bool
+}

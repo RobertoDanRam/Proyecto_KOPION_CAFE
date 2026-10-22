@@ -1,10 +1,10 @@
 //
 //  AccesoLoginViewModel.swift
-//  kopion
+//  kopion / Modulos / AccesoLogin
 //
-//  ViewModel del módulo Acceso Login.
-//  Maneja login, registro por enlaces nativos de Firebase, restablecimiento de
-//  contraseña y estados de carga para evitar envíos duplicados.
+//  ViewModel del módulo de acceso.
+//  Maneja inicio de sesión, registro, restablecimiento de contraseña
+//  y estados de carga para evitar envíos duplicados (isSubmitting).
 //
 
 import Combine
@@ -12,201 +12,332 @@ import Foundation
 
 @MainActor
 final class AccesoLoginViewModel: LoadableViewModel {
-    @Published var customerFirstName = ""
-    @Published var customerLastName = ""
-    @Published var customerEmail = ""
-    @Published var customerPassword = ""
-    @Published var customerType: CustomerType = .student
-    @Published var selectedSchool: School = .escaSantoTomas
 
-    @Published var staffFirstName = ""
-    @Published var staffLastName = ""
-    @Published var staffEmail = ""
-    @Published var staffPassword = ""
-    @Published var staffRegistrationAccessCode = ""
-    @Published var selectedBranch: Branch = .kopionESCA
-    @Published var requestedRole: UserRole = .collaborator
-    @Published var isRegisteringStaff = false
-    @Published var registrationKind: AccessRegistrationKind = .customer
+    // MARK: - Campos del formulario de cliente
 
-    @Published private(set) var session: AuthSession?
-    @Published private(set) var confirmationMessage: String?
+    @Published var nombreCliente    = ""
+    @Published var apellidosCliente = ""
+    @Published var correoCliente    = ""
+    @Published var contrasenaCliente = ""
+    @Published var tipoCliente: CustomerType = .student
+    @Published var escuelaSeleccionada: School = .escaSantoTomas
 
-    var hasValidStaffRegistrationAccessCode: Bool {
-        staffRegistrationAccessCode == "2024"
+    // MARK: - Campos del formulario de personal de sucursal
+
+    @Published var nombrePersonal    = ""
+    @Published var apellidosPersonal = ""
+    @Published var correoPersonal    = ""
+    @Published var contrasenaPersonal = ""
+    @Published var codigoAccesoRegistro = ""
+    @Published var sucursalSeleccionada: Branch = .kopionESCA
+    @Published var rolSolicitado: UserRole = .collaborator
+    @Published var estaRegistrandoPersonal = false
+    @Published var tipoRegistro: AccessRegistrationKind = .customer
+
+    // MARK: - Estado de sesión y mensajes
+
+    @Published private(set) var sesion: AuthSession?
+    @Published private(set) var mensajeConfirmacion: String?
+
+    // MARK: - Validaciones
+
+    /// Verifica que el código de acceso para registrar personal sea correcto.
+    var codigoAccesoValido: Bool {
+        codigoAccesoRegistro == "2024"
     }
 
-    var canCreateCustomerAccount: Bool {
-        !customerFirstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !customerLastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !customerEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !customerPassword.isEmpty
+    /// Verifica que todos los campos del registro de cliente estén completos.
+    var puedeCrearCuentaCliente: Bool {
+        !nombreCliente.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !apellidosCliente.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !correoCliente.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !contrasenaCliente.isEmpty
     }
 
-    var canCreateStaffAccount: Bool {
-        !staffFirstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !staffLastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !staffEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !staffPassword.isEmpty &&
-        hasValidStaffRegistrationAccessCode
+    /// Verifica que todos los campos del registro de personal estén completos.
+    var puedeCrearCuentaPersonal: Bool {
+        !nombrePersonal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !apellidosPersonal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !correoPersonal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !contrasenaPersonal.isEmpty &&
+        codigoAccesoValido
     }
 
-    private let authenticationService: AuthenticationServicing
-    private var task: Task<Void, Never>?
+    // MARK: - Dependencias
+
+    private let servicioAutenticacion: AuthenticationServicing
+    private var tarea: Task<Void, Never>?
 
     override init() {
-        self.authenticationService = AuthenticationService()
+        self.servicioAutenticacion = AuthenticationService()
         super.init()
     }
 
-    init(authenticationService: AuthenticationServicing) {
-        self.authenticationService = authenticationService
+    init(servicioAutenticacion: AuthenticationServicing) {
+        self.servicioAutenticacion = servicioAutenticacion
         super.init()
     }
 
-    /// Inicia sesión de cliente existente.
-    func loginCustomer() {
-        guard !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
-        confirmationMessage = nil
+    // MARK: - Inicio de sesión con correo
 
-        task = Task {
+    /// Inicia sesión con correo y contraseña. Firestore determina el rol real del usuario.
+    func iniciarSesionCliente() {
+        guard !estaEnviando else { return }
+        estaEnviando = true
+        mensajeError = nil
+        mensajeConfirmacion = nil
+
+        tarea = Task {
             do {
-                let profile = CustomerLoginProfile(
-                    firstName: customerFirstName.isEmpty ? "Cliente" : customerFirstName,
-                    lastName: customerLastName,
-                    email: customerEmail,
-                    customerType: customerType,
-                    school: selectedSchool
+                let perfil = CustomerLoginProfile(
+                    firstName: nombreCliente.isEmpty ? "Cliente" : nombreCliente,
+                    lastName:  apellidosCliente,
+                    email:     correoCliente,
+                    customerType: tipoCliente,
+                    school:    escuelaSeleccionada
                 )
-                session = try await authenticationService.signInCustomer(profile: profile, password: customerPassword)
-                confirmationMessage = "Bienvenido. Tienda virtual lista."
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-
-            isSubmitting = false
-            task = nil
-        }
-    }
-
-    /// Solicita instrucciones para restablecer contraseña de cliente.
-    func resetCustomerPassword() {
-        resetPassword(email: customerEmail)
-    }
-
-    /// Solicita instrucciones para restablecer contraseña de personal de sucursal.
-    func resetStaffPassword() {
-        resetPassword(email: staffEmail)
-    }
-
-    /// Ejecuta el flujo compartido de recuperación de contraseña por enlace Firebase.
-    private func resetPassword(email: String) {
-        guard !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
-        confirmationMessage = nil
-
-        task = Task {
-            do {
-                try await authenticationService.sendPasswordReset(to: email)
-                confirmationMessage = "Te hemos enviado un enlace a tu correo para restablecer tu contraseña."
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-
-            isSubmitting = false
-            task = nil
-        }
-    }
-
-    /// Inicia sesión de empleado/editor/dueña existente.
-    func loginStaff() {
-        guard !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
-        confirmationMessage = nil
-
-        task = Task {
-            do {
-                let profile = StaffLoginProfile(
-                    email: staffEmail,
-                    branch: selectedBranch,
-                    requestedRole: requestedRole
+                sesion = try await servicioAutenticacion.iniciarSesionCliente(
+                    perfil: perfil,
+                    contrasena: contrasenaCliente
                 )
-                session = try await authenticationService.signInStaff(profile: profile, password: staffPassword)
-                confirmationMessage = "Acceso de sucursal activo: \(session?.role.displayName ?? "Colaborador")."
+                mensajeConfirmacion = "Bienvenido. Abriendo tu menú."
             } catch {
-                errorMessage = error.localizedDescription
+                mensajeError = error.localizedDescription
             }
-
-            isSubmitting = false
-            task = nil
+            estaEnviando = false
+            tarea = nil
         }
     }
 
-    /// Crea una cuenta de cliente y dispara el enlace nativo de verificación de Firebase.
-    func createCustomerAccount() {
-        guard !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
-        confirmationMessage = nil
+    /// Inicia sesión de personal de sucursal con correo y contraseña.
+    func iniciarSesionPersonal() {
+        guard !estaEnviando else { return }
+        estaEnviando = true
+        mensajeError = nil
+        mensajeConfirmacion = nil
 
-        task = Task {
+        tarea = Task {
             do {
-                let profile = CustomerLoginProfile(
-                    firstName: customerFirstName,
-                    lastName: customerLastName,
-                    email: customerEmail,
-                    customerType: customerType,
-                    school: selectedSchool
+                let perfil = StaffLoginProfile(
+                    email:         correoPersonal,
+                    branch:        sucursalSeleccionada,
+                    requestedRole: rolSolicitado
                 )
-                session = try await authenticationService.registerCustomer(profile: profile, password: customerPassword)
-                confirmationMessage = "Cuenta creada. Te enviamos un enlace a tu correo para verificar tu cuenta."
+                sesion = try await servicioAutenticacion.iniciarSesionPersonal(
+                    perfil: perfil,
+                    contrasena: contrasenaPersonal
+                )
+                mensajeConfirmacion = "Acceso de sucursal activo: \(sesion?.role.displayName ?? "Colaborador")."
             } catch {
-                errorMessage = error.localizedDescription
+                mensajeError = error.localizedDescription
             }
-
-            isSubmitting = false
-            task = nil
+            estaEnviando = false
+            tarea = nil
         }
     }
 
-    /// Crea una cuenta de sucursal como Colaborador y dispara el enlace nativo de verificación de Firebase.
-    func createStaffAccount() {
-        guard !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
-        confirmationMessage = nil
+    // MARK: - Inicio de sesión con Google
 
-        task = Task {
+    /// Presenta el sheet nativo de Google y autentica sin necesidad de escribir correo ni contraseña.
+    func iniciarSesionConGoogle(rol: UserProfileRole = .cliente, sucursal: UserProfileBranch = .ningunaCliente) {
+        guard !estaEnviando else { return }
+        estaEnviando = true
+        mensajeError = nil
+        mensajeConfirmacion = nil
+
+        tarea = Task {
             do {
-                guard hasValidStaffRegistrationAccessCode else {
-                    throw AuthenticationError.unauthorizedRole
+                sesion = try await servicioAutenticacion.iniciarSesionConGoogle(
+                    rol: rol,
+                    sucursal: sucursal
+                )
+                mensajeConfirmacion = "Bienvenido. Sesión iniciada con Google."
+            } catch let error as ErrorGoogleSignIn {
+                // Cancelación silenciosa: el usuario cerró el sheet sin elegir cuenta.
+                if case .cancelado = error {
+                    mensajeError = nil
+                } else {
+                    mensajeError = error.localizedDescription
                 }
+            } catch {
+                mensajeError = error.localizedDescription
+            }
+            estaEnviando = false
+            tarea = nil
+        }
+    }
 
-                let profile = StaffLoginProfile(
-                    email: staffEmail,
-                    branch: selectedBranch,
+    // MARK: - Restablecimiento de contraseña
+
+    /// Envía correo de restablecimiento al correo del cliente.
+    func restablecerContrasenaCliente() {
+        restablecerContrasena(correo: correoCliente)
+    }
+
+    /// Envía correo de restablecimiento al correo del personal.
+    func restablecerContrasenaPersonal() {
+        restablecerContrasena(correo: correoPersonal)
+    }
+
+    /// Flujo compartido de restablecimiento de contraseña por enlace de Firebase.
+    private func restablecerContrasena(correo: String) {
+        guard !estaEnviando else { return }
+        estaEnviando = true
+        mensajeError = nil
+        mensajeConfirmacion = nil
+
+        tarea = Task {
+            do {
+                try await servicioAutenticacion.enviarCorreoRestablecimiento(a: correo)
+                mensajeConfirmacion = "Te enviamos un enlace a \(correo) para restablecer tu contraseña."
+            } catch {
+                mensajeError = error.localizedDescription
+            }
+            estaEnviando = false
+            tarea = nil
+        }
+    }
+
+    // MARK: - Registro de cuenta nueva
+
+    /// Crea una cuenta de cliente y envía el correo de verificación de Firebase.
+    /// Si el correo de verificación falla, muestra el detalle técnico sin bloquear el acceso.
+    func crearCuentaCliente() {
+        guard !estaEnviando else { return }
+        guard validarRegistroCliente() else { return }
+
+        estaEnviando = true
+        mensajeError = nil
+        mensajeConfirmacion = nil
+
+        tarea = Task {
+            do {
+                let escuelaGuardada = UserProfileEscuela(escuela: escuelaSeleccionada)
+                let sucursalDerivada = escuelaGuardada.sucursalAsociada
+                let perfil = CustomerLoginProfile(
+                    firstName: nombreCliente.trimmingCharacters(in: .whitespacesAndNewlines),
+                    lastName:  apellidosCliente.trimmingCharacters(in: .whitespacesAndNewlines),
+                    email:     correoCliente.trimmingCharacters(in: .whitespacesAndNewlines),
+                    customerType: tipoCliente,
+                    school:    escuelaSeleccionada
+                )
+                sesion = try await servicioAutenticacion.registrarCliente(
+                    perfil: perfil,
+                    contrasena: contrasenaCliente,
+                    escuela: escuelaGuardada,
+                    sucursal: sucursalDerivada
+                )
+
+                // Verificar si el envío del correo de verificación tuvo un error separado.
+                if let errorVerificacion = servicioAutenticacion.errorVerificacionCorreo {
+                    mensajeConfirmacion = "Cuenta creada. No se pudo enviar el correo de verificación:"
+                    mensajeError = errorVerificacion.localizedDescription
+                } else {
+                    mensajeConfirmacion = "Cuenta creada. Revisa \(correoCliente.trimmingCharacters(in: .whitespacesAndNewlines)) para verificar tu cuenta."
+                }
+            } catch {
+                mensajeError = error.localizedDescription
+            }
+            estaEnviando = false
+            tarea = nil
+        }
+    }
+
+    /// Registra una solicitud de cuenta de sucursal como Colaborador y envía correo de verificación.
+    func crearCuentaPersonal() {
+        guard !estaEnviando else { return }
+        guard validarRegistroPersonal() else { return }
+
+        estaEnviando = true
+        mensajeError = nil
+        mensajeConfirmacion = nil
+
+        tarea = Task {
+            do {
+                let perfil = StaffLoginProfile(
+                    email:     correoPersonal.trimmingCharacters(in: .whitespacesAndNewlines),
+                    firstName: nombrePersonal.trimmingCharacters(in: .whitespacesAndNewlines),
+                    lastName:  apellidosPersonal.trimmingCharacters(in: .whitespacesAndNewlines),
+                    branch:    sucursalSeleccionada,
                     requestedRole: .collaborator
                 )
-                session = try await authenticationService.registerStaffRequest(profile: profile, password: staffPassword)
-                confirmationMessage = "Cuenta registrada como Colaborador. Te enviamos un enlace a tu correo para verificar tu cuenta."
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+                sesion = try await servicioAutenticacion.registrarSolicitudPersonal(
+                    perfil: perfil,
+                    contrasena: contrasenaPersonal
+                )
 
-            isSubmitting = false
-            task = nil
+                if let errorVerificacion = servicioAutenticacion.errorVerificacionCorreo {
+                    mensajeConfirmacion = "Cuenta registrada como Colaborador. No se pudo enviar el correo de verificación:"
+                    mensajeError = errorVerificacion.localizedDescription
+                } else {
+                    mensajeConfirmacion = "Cuenta registrada como Colaborador. Revisa \(correoPersonal.trimmingCharacters(in: .whitespacesAndNewlines)) para verificar tu cuenta."
+                }
+            } catch {
+                mensajeError = error.localizedDescription
+            }
+            estaEnviando = false
+            tarea = nil
         }
     }
 
-    /// Cancela cualquier tarea viva al cerrar la pantalla.
-    func cancel() {
-        task?.cancel()
-        task = nil
-        isLoading = false
-        isSubmitting = false
+    // MARK: - Validaciones locales
+
+    /// Valida los campos del formulario de cliente antes de llamar a Firebase.
+    private func validarRegistroCliente() -> Bool {
+        if nombreCliente.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            mensajeError = "Escribe tus nombres."
+            return false
+        }
+        if apellidosCliente.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            mensajeError = "Escribe tus apellidos."
+            return false
+        }
+        if correoCliente.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            mensajeError = "Escribe tu correo."
+            return false
+        }
+        if contrasenaCliente.count < 6 {
+            mensajeError = "La contraseña debe tener al menos 6 caracteres."
+            return false
+        }
+        return true
     }
+
+    /// Valida los campos del formulario de personal antes de llamar a Firebase.
+    private func validarRegistroPersonal() -> Bool {
+        guard codigoAccesoValido else {
+            mensajeError = "El código de acceso no es correcto."
+            return false
+        }
+        if nombrePersonal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            mensajeError = "Escribe tus nombres."
+            return false
+        }
+        if apellidosPersonal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            mensajeError = "Escribe tus apellidos."
+            return false
+        }
+        if correoPersonal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            mensajeError = "Escribe tu correo."
+            return false
+        }
+        if contrasenaPersonal.count < 6 {
+            mensajeError = "La contraseña debe tener al menos 6 caracteres."
+            return false
+        }
+        return true
+    }
+
+    // MARK: - Ciclo de vida
+
+    /// Cancela cualquier tarea activa al cerrar la pantalla para evitar trabajo huérfano.
+    func cancelar() {
+        tarea?.cancel()
+        tarea = nil
+        estaCargando = false
+        estaEnviando = false
+    }
+
+    // Alias para compatibilidad con onDisappear que llama cancel()
+    func cancel() { cancelar() }
 }

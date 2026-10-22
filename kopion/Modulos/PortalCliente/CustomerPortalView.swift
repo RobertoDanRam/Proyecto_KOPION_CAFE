@@ -1,53 +1,141 @@
 //
 //  CustomerPortalView.swift
-//  kopion / Modules / CustomerPortal
-//
-//  Módulo 2: Portal cliente (CRM y tienda digital).
-//  Muestra el carrusel de promociones, la tienda/cotizador y el estado de pedidos.
-//  El carrito global separa pedidos por sucursal (Kopion ESCA, CECyT 1, ESE Café).
+//  kopion / Modulos / PortalCliente
 //
 
 import Combine
+import SwiftData
 import SwiftUI
 
 struct CustomerPortalView: View {
-    @StateObject private var viewModel = CustomerPortalViewModel()
+    let usuario: UserProfile
+    @StateObject private var modeloVista = CustomerPortalViewModel()
 
     var body: some View {
-        List {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Perfil de usuario
+                HStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue.opacity(0.15))
+                            .frame(width: 64, height: 64)
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(.blue)
+                    }
 
-            // MARK: Carrusel de promociones (gestionado por la dueña)
-            Section("Promociones") {
-                ForEach(viewModel.promotions, id: \.self) { promo in
-                    ModuleRow(title: promo, detail: "Gestionado por administración", systemImage: "tag", tint: .pink)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(usuario.nombreCompleto)
+                            .font(.headline)
+                        Text(usuario.correo)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .padding()
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                // Acciones principales
+                VStack(spacing: 14) {
+                    // Enviar archivos
+                    NavigationLink { PrintPreparationView() } label: {
+                        TarjetaAccion(
+                            titulo: "Enviar archivos",
+                            subtitulo: "Manda a la cola de impresión",
+                            sistemaImagen: "paperplane.fill",
+                            color: .blue
+                        ) {}
+                    }
+                    .buttonStyle(.plain)
+
+                    // Mis pedidos y estatus
+                    NavigationLink { MisPedidosView() } label: {
+                        TarjetaAccion(
+                            titulo: "Mis pedidos y estatus",
+                            subtitulo: "Consulta tu historial y estado actual",
+                            sistemaImagen: "tray.full",
+                            color: .indigo
+                        ) {}
+                    }
+                    .buttonStyle(.plain)
+
+                    // Catálogo y cotizador
+                    NavigationLink { CatalogView() } label: {
+                        TarjetaAccion(
+                            titulo: "Catálogo y cotizador",
+                            subtitulo: "Explora productos y precios",
+                            sistemaImagen: "list.bullet.rectangle.portrait",
+                            color: .green
+                        ) {}
+                    }
+                    .buttonStyle(.plain)
+
+                    // Atención y sugerencias
+                    NavigationLink { AtencionSugerenciasView() } label: {
+                        TarjetaAccion(
+                            titulo: "Atención y sugerencias",
+                            subtitulo: "Buzón de quejas y comentarios",
+                            sistemaImagen: "bubble.left.and.bubble.right.fill",
+                            color: .orange
+                        ) {}
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-
-            // MARK: Tienda digital y cotizador
-            Section("Tienda y cotizador") {
-                ModuleRow(title: "Engargolados", detail: "Precio dinámico por cantidad de hojas", systemImage: "book.closed", tint: .blue)
-                ModuleRow(title: "Enmicados", detail: "Credencial, media carta y carta", systemImage: "rectangle.on.rectangle", tint: .cyan)
-                ModuleRow(title: "Copias por volumen", detail: "50-99 a $0.70 · más de 100 a $0.50", systemImage: "doc.on.doc", tint: .green)
-                ModuleRow(title: "Escaneos", detail: "$3.00 por página", systemImage: "scanner", tint: .orange)
-                ModuleRow(title: "Carrito global", detail: "Separa pedidos por sucursal automáticamente", systemImage: "cart", tint: .indigo)
-            }
-
-            // MARK: Pedidos y trabajos especiales
-            Section("Pedidos") {
-                if viewModel.isLoading { ProgressView() }
-
-                ForEach(viewModel.workOrders) { order in
-                    ModuleRow(
-                        title: order.folio,
-                        detail: "\(order.customerName) · \(order.branch.shortName) · \(order.status.displayName)",
-                        systemImage: "tray.full",
-                        tint: .indigo
-                    )
-                }
-            }
+            .padding()
         }
         .navigationTitle("Portal cliente")
-        .task { viewModel.load() }
-        .onDisappear { viewModel.cancel() }
+        .task { modeloVista.cargar() }
+        .onDisappear { modeloVista.cancelar() }
+    }
+}
+
+struct TarjetaAccion: View {
+    // Propiedades
+    let titulo: String
+    let subtitulo: String?
+    let sistemaImagen: String
+    let color: Color
+    let accion: () -> Void
+
+    var body: some View {
+        Button(action: accion) {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.15))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: sistemaImagen)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(color)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(titulo)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    if let subtitulo {
+                        Text(subtitulo)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
     }
 }

@@ -1,70 +1,55 @@
 //
 //  AnalyticsViewModel.swift
-//  kopion / Modules / Analytics
+//  kopion / Modulos / Analitica
 //
 //  Lógica del módulo de analítica, alertas y machine learning de tóner/stock.
-//  Reutiliza AnalyticsService para proyecciones de agotamiento y semáforo operativo.
 //
 
 import Combine
 import Foundation
 
-/// ViewModel del módulo de analítica: tóner, stock bajo, proyecciones y alertas.
 @MainActor
 final class AnalyticsViewModel: LoadableViewModel {
 
-    // MARK: - Estado publicado
+    @Published private(set) var resumen: AdminDashboardSnapshot?
+    @Published private(set) var productosStockBajo: [Product] = []
 
-    /// Snapshot con conteos de alertas de tóner y stock bajo.
-    @Published private(set) var snapshot: AdminDashboardSnapshot?
-
-    /// Productos que requieren resurtido en alguna sucursal.
-    @Published private(set) var lowStockProducts: [Product] = []
-
-    // MARK: - Dependencias
-
-    private let service: AnalyticsServicing
-    private var loadTask: Task<Void, Never>?
-
-    // MARK: - Init
+    private let servicio: AnalyticsServicing
+    private var tareaActiva: Task<Void, Never>?
 
     override init() {
-        self.service = AnalyticsService()
+        self.servicio = AnalyticsService()
         super.init()
     }
 
-    init(service: AnalyticsServicing) {
-        self.service = service
+    init(servicio: AnalyticsServicing) {
+        self.servicio = servicio
         super.init()
     }
 
-    // MARK: - Acciones
+    func cargar() {
+        guard tareaActiva == nil else { return }
+        estaCargando = true
+        mensajeError = nil
 
-    /// Carga snapshot y productos con stock bajo en paralelo.
-    func load() {
-        guard loadTask == nil else { return }
-        isLoading = true
-        errorMessage = nil
-
-        loadTask = Task {
+        tareaActiva = Task {
             do {
-                async let snapshot = service.fetchDashboardSnapshot()
-                async let lowStock = service.fetchLowStockProducts()
-                self.snapshot = try await snapshot
-                self.lowStockProducts = try await lowStock
+                async let resumen = servicio.fetchDashboardSnapshot()
+                async let stockBajo = servicio.fetchLowStockProducts()
+                self.resumen = try await resumen
+                self.productosStockBajo = try await stockBajo
             } catch is CancellationError {
             } catch {
-                errorMessage = error.localizedDescription
+                self.mensajeError = error.localizedDescription
             }
-            isLoading = false
-            loadTask = nil
+            self.estaCargando = false
+            self.tareaActiva = nil
         }
     }
 
-    /// Cancela la carga activa al salir de pantalla.
-    func cancel() {
-        loadTask?.cancel()
-        loadTask = nil
-        isLoading = false
+    func cancelar() {
+        tareaActiva?.cancel()
+        tareaActiva = nil
+        estaCargando = false
     }
 }

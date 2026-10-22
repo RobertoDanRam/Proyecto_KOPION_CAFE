@@ -1,64 +1,51 @@
 //
 //  PaymentsViewModel.swift
-//  kopion / Modules / Payments
+//  kopion / Modulos / Pagos
 //
 //  Lógica del módulo de gestión de pagos y conciliación manual.
-//  Fase 1: los pagos se validan manualmente vinculando capturas de transferencias o vouchers al folio.
 //
 
 import Combine
 import Foundation
 
-/// ViewModel de pagos: conciliación manual de transferencias y vouchers por folio de venta.
 @MainActor
 final class PaymentsViewModel: LoadableViewModel {
 
-    // MARK: - Estado publicado
+    @Published private(set) var conciliaciones: [PaymentReconciliation] = []
 
-    /// Conciliaciones pendientes o ya vinculadas a un folio de venta.
-    @Published private(set) var reconciliations: [PaymentReconciliation] = []
-
-    // MARK: - Dependencias
-
-    private let service: PaymentServicing
-    private var task: Task<Void, Never>?
-
-    // MARK: - Init
+    private let servicio: PaymentServicing
+    private var tarea: Task<Void, Never>?
 
     override init() {
-        self.service = PaymentService()
+        self.servicio = PaymentService()
         super.init()
     }
 
-    init(service: PaymentServicing) {
-        self.service = service
+    init(servicio: PaymentServicing) {
+        self.servicio = servicio
         super.init()
     }
 
-    // MARK: - Acciones
+    func cargar() {
+        guard tarea == nil else { return }
+        estaCargando = true
+        mensajeError = nil
 
-    /// Carga conciliaciones. Ignora llamadas duplicadas.
-    func load() {
-        guard task == nil else { return }
-        isLoading = true
-        errorMessage = nil
-
-        task = Task {
+        tarea = Task {
             do {
-                reconciliations = try await service.fetchReconciliations()
+                conciliaciones = try await servicio.fetchReconciliations()
             } catch is CancellationError {
             } catch {
-                errorMessage = error.localizedDescription
+                mensajeError = error.localizedDescription
             }
-            isLoading = false
-            task = nil
+            estaCargando = false
+            tarea = nil
         }
     }
 
-    /// Cancela la carga activa al salir de pantalla.
-    func cancel() {
-        task?.cancel()
-        task = nil
-        isLoading = false
+    func cancelar() {
+        tarea?.cancel()
+        tarea = nil
+        estaCargando = false
     }
 }

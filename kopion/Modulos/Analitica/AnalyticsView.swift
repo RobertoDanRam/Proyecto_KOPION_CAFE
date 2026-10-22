@@ -1,9 +1,6 @@
 //
 //  AnalyticsView.swift
-//  kopion / Modules / Analytics
-//
-//  Módulo 3: Analítica, alertas y ML de tóner/stock.
-//  Semáforo visual (verde/naranja/rojo), proyección de agotamiento y base para PDF de stock bajo.
+//  kopion / Modulos / Analitica
 //
 
 import Combine
@@ -15,22 +12,21 @@ struct AnalyticsView: View {
     var body: some View {
         List {
 
-            // MARK: Semáforo operativo (verde = OK, naranja/rojo = atención)
             Section("Semáforo operativo") {
-                if viewModel.isLoading { ProgressView() }
+                if viewModel.estaCargando { ProgressView() }
 
-                if let snapshot = viewModel.snapshot {
+                if let resumen = viewModel.resumen {
                     ModuleRow(
                         title: "Tóner",
-                        detail: snapshot.tonerAlertCount > 0 ? "Atención requerida" : "Nivel estable",
+                        detail: resumen.tonerAlertCount > 0 ? "Atención requerida" : "Nivel estable",
                         systemImage: "printer",
-                        tint: snapshot.tonerAlertCount > 0 ? .red : .green
+                        tint: resumen.tonerAlertCount > 0 ? .red : .green
                     )
                     ModuleRow(
                         title: "Stock bajo",
-                        detail: "\(snapshot.lowStockCount) artículos requieren resurtido",
+                        detail: "\(resumen.lowStockCount) artículos requieren resurtido",
                         systemImage: "shippingbox",
-                        tint: snapshot.lowStockCount > 0 ? .orange : .green
+                        tint: resumen.lowStockCount > 0 ? .orange : .green
                     )
                     ModuleRow(
                         title: "PDF automático",
@@ -41,11 +37,10 @@ struct AnalyticsView: View {
                 }
             }
 
-            // MARK: Proyección de agotamiento (modelo aritmético inicial)
             Section("Proyección de agotamiento") {
-                ForEach(viewModel.lowStockProducts) { product in
+                ForEach(viewModel.productosStockBajo) { producto in
                     ModuleRow(
-                        title: product.name,
+                        title: producto.name,
                         detail: "Modelo aritmético: revisar resurtido esta semana",
                         systemImage: "chart.xyaxis.line",
                         tint: .purple
@@ -54,7 +49,7 @@ struct AnalyticsView: View {
             }
         }
         .navigationTitle("Analítica")
-        .task { viewModel.load() }
-        .onDisappear { viewModel.cancel() }
+        .task { viewModel.cargar() }
+        .onDisappear { viewModel.cancelar() }
     }
 }

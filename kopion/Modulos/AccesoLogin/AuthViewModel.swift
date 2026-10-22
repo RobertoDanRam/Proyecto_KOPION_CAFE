@@ -2,7 +2,7 @@
 //  AuthViewModel.swift
 //  kopion
 //
-//  ViewModel reusable para pantallas de autenticación.
+//  ViewModel reutilizable para pantallas de autenticación.
 //  Consume AuthManager con async/await y expone estado de UI seguro para SwiftUI.
 //
 
@@ -11,97 +11,103 @@ import Foundation
 
 @MainActor
 final class AuthViewModel: ObservableObject {
-    @Published private(set) var currentUser: UserProfile?
-    @Published var isLoading = false
-    @Published var errorMessage: String?
+    @Published private(set) var usuarioActual: UserProfile?
+    @Published var estaCargando = false
+    @Published var mensajeError: String?
 
-    private let authManager: AuthManaging
+    private let gestorAuth: AuthManaging
 
-    init(authManager: AuthManaging = AuthManager.shared) {
-        self.authManager = authManager
-        self.currentUser = authManager.currentUser
+    convenience init() {
+        self.init(gestorAuth: AuthManager.shared)
+    }
+
+    init(gestorAuth: AuthManaging) {
+        self.gestorAuth = gestorAuth
+        self.usuarioActual = gestorAuth.usuarioActual
     }
 
     /// Registra usuario en Firebase Auth y guarda su perfil en Firestore /users/{uid}.
-    func signUp(
-        email: String,
-        password: String,
-        role: UserProfileRole,
-        sucursal: UserProfileBranch
+    func registrar(
+        correo: String,
+        contrasena: String,
+        nombre: String,
+        apellidos: String,
+        rol: UserProfileRole,
+        sucursal: UserProfileBranch,
+        escuela: UserProfileEscuela? = nil
     ) async -> UserProfile? {
-        guard !isLoading else { return nil }
-        isLoading = true
-        errorMessage = nil
-
-        defer { isLoading = false }
+        guard !estaCargando else { return nil }
+        estaCargando = true
+        mensajeError = nil
+        defer { estaCargando = false }
 
         do {
-            let profile = try await authManager.signUp(
-                email: email,
-                password: password,
-                role: role,
-                sucursal: sucursal
+            let perfil = try await gestorAuth.registrar(
+                correo: correo,
+                contrasena: contrasena,
+                nombre: nombre,
+                apellidos: apellidos,
+                rol: rol,
+                sucursal: sucursal,
+                escuela: escuela
             )
-            currentUser = profile
-            return profile
+            usuarioActual = perfil
+            return perfil
         } catch {
-            errorMessage = Self.friendlyMessage(for: error)
+            mensajeError = Self.mensajeAmigable(para: error)
             return nil
         }
     }
 
     /// Inicia sesión y recupera el perfil Firestore para conocer rol y sucursal.
-    func signIn(email: String, password: String) async -> UserProfile? {
-        guard !isLoading else { return nil }
-        isLoading = true
-        errorMessage = nil
-
-        defer { isLoading = false }
+    func iniciarSesion(correo: String, contrasena: String) async -> UserProfile? {
+        guard !estaCargando else { return nil }
+        estaCargando = true
+        mensajeError = nil
+        defer { estaCargando = false }
 
         do {
-            let profile = try await authManager.signIn(email: email, password: password)
-            currentUser = profile
-            return profile
+            let perfil = try await gestorAuth.iniciarSesion(correo: correo, contrasena: contrasena)
+            usuarioActual = perfil
+            return perfil
         } catch {
-            errorMessage = Self.friendlyMessage(for: error)
+            mensajeError = Self.mensajeAmigable(para: error)
             return nil
         }
     }
 
     /// Cierra sesión en Firebase Auth.
-    func signOut() {
+    func cerrarSesion() {
         do {
-            try authManager.signOut()
-            currentUser = nil
+            try gestorAuth.cerrarSesion()
+            usuarioActual = nil
         } catch {
-            errorMessage = Self.friendlyMessage(for: error)
+            mensajeError = Self.mensajeAmigable(para: error)
         }
     }
 
     /// Solicita correo de recuperación de contraseña.
-    func sendPasswordReset(email: String) async -> Bool {
-        guard !isLoading else { return false }
-        isLoading = true
-        errorMessage = nil
-
-        defer { isLoading = false }
+    func enviarCorreoRestablecimiento(correo: String) async -> Bool {
+        guard !estaCargando else { return false }
+        estaCargando = true
+        mensajeError = nil
+        defer { estaCargando = false }
 
         do {
-            try await authManager.sendPasswordReset(email: email)
+            try await gestorAuth.enviarCorreoRestablecimiento(correo: correo)
             return true
         } catch {
-            errorMessage = Self.friendlyMessage(for: error)
+            mensajeError = Self.mensajeAmigable(para: error)
             return false
         }
     }
 
     /// Mensaje final en español para cualquier error que llegue a la interfaz.
-    static func friendlyMessage(for error: Error) -> String {
-        if let localizedError = error as? LocalizedError,
-           let description = localizedError.errorDescription {
-            return description
+    static func mensajeAmigable(para error: Error) -> String {
+        if let localizado = error as? LocalizedError,
+           let descripcion = localizado.errorDescription {
+            return descripcion
         }
-
         return "Ocurrió un error inesperado. Inténtalo de nuevo."
     }
 }

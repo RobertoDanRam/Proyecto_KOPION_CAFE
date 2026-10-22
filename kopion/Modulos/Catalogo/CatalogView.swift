@@ -1,10 +1,6 @@
 //
 //  CatalogView.swift
-//  kopion / Modules / Catalog
-//
-//  Módulo 4: Catálogo centralizado.
-//  Muestra productos con precio y stock diferenciados por sucursal.
-//  La barra de búsqueda usa debounce de 0.5 s vía CatalogViewModel.
+//  kopion / Modulos / Catalogo
 //
 
 import Combine
@@ -16,31 +12,28 @@ struct CatalogView: View {
     var body: some View {
         List {
 
-            // MARK: Selector de sucursal — cambia precios y stock
             Section("Sucursal") {
-                Picker("Sucursal", selection: $viewModel.selectedBranch) {
-                    ForEach(Branch.allCases) { branch in
-                        Text(branch.displayName).tag(branch)
+                Picker("Sucursal", selection: $viewModel.sucursalSeleccionada) {
+                    ForEach(Branch.allCases) { sucursal in
+                        Text(sucursal.displayName).tag(sucursal)
                     }
                 }
             }
 
-            // MARK: Lista de productos
             Section("Productos") {
-                if viewModel.isLoading { ProgressView() }
+                if viewModel.estaCargando { ProgressView() }
 
-                ForEach(viewModel.products) { product in
+                ForEach(viewModel.productos) { producto in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(product.name).font(.headline)
-                        Text(product.category)
+                        Text(producto.name).font(.headline)
+                        Text(producto.category)
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
-                            Text(CurrencyFormatter.pesos(product.price(for: viewModel.selectedBranch)))
+                            Text(CurrencyFormatter.pesos(producto.price(for: viewModel.sucursalSeleccionada)))
                             Spacer()
-                            // Stock en rojo si está por debajo del punto de reorden.
-                            Text("Stock: \(product.stock(for: viewModel.selectedBranch))")
+                            Text("Stock: \(producto.stock(for: viewModel.sucursalSeleccionada))")
                                 .foregroundStyle(
-                                    product.isLowStock(at: viewModel.selectedBranch) ? .red : .secondary
+                                    producto.isLowStock(at: viewModel.sucursalSeleccionada) ? .red : .secondary
                                 )
                         }
                         .font(.subheadline)
@@ -50,8 +43,8 @@ struct CatalogView: View {
             }
         }
         .navigationTitle("Catálogo")
-        .searchable(text: $viewModel.searchText, prompt: "Buscar producto o código")
-        .task { viewModel.load() }
-        .onDisappear { viewModel.cancel() }
+        .searchable(text: $viewModel.textoBusqueda, prompt: "Buscar producto o código")
+        .task { viewModel.cargar() }
+        .onDisappear { viewModel.cancelar() }
     }
 }
